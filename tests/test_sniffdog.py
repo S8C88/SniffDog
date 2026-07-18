@@ -142,7 +142,7 @@ class TestSessionReassembly(unittest.TestCase):
                       64, 6, 0,
                       bytes([int(x) for x in src_ip.split(".")]),
                       bytes([int(x) for x in dst_ip.split(".")]))
-        tcp_hdr = pack("!HHIIBBHHH", sport, dport, 0, 0, 5 << 4, 0x18, 0, 0)
+        tcp_hdr = pack("!HHIIHHHH", sport, dport, 0, 0, (5 << 12) | 0x18, 0, 0, 0)
         return ip_hdr + tcp_hdr + payload
 
     def test_reassembles_single_packet(self):

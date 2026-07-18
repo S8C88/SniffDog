@@ -13,9 +13,7 @@ from collections import defaultdict
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 
-# ---------------------------------------------------------------------------
 # Pipeline stage 1: pcap reader
-# ---------------------------------------------------------------------------
 
 def pcap_reader(path: str) -> Generator[Tuple[Any, bytes], None, None]:
     """Yield (scapy_packet, raw_bytes) from a pcap file.
@@ -38,9 +36,7 @@ def pcap_reader(path: str) -> Generator[Tuple[Any, bytes], None, None]:
         raise RuntimeError(f"Failed to read pcap: {e}") from e
 
 
-# ---------------------------------------------------------------------------
 # Pipeline stage 2: HTTP filter
-# ---------------------------------------------------------------------------
 
 def http_filter(
     stream: Generator[Tuple[Any, bytes], None, None]
@@ -90,7 +86,7 @@ def _parse_ip(raw: bytes) -> Optional[Tuple[str, str, str, str]]:
 
 
 def _payload_from_raw(raw: bytes) -> bytes:
-    """Extract TCP payload from raw IP packet."""
+    """Extract TCP payload from raw IP packet, stripping both IP and TCP headers."""
     try:
         if len(raw) < 20:
             return b""
@@ -102,7 +98,12 @@ def _payload_from_raw(raw: bytes) -> bytes:
             total_len = (raw[2] << 8) | raw[3]
             if total_len > len(raw):
                 total_len = len(raw)
-            return raw[ihl:total_len]
+            # TCP data offset (upper 4 bits of byte 12 in TCP header)
+            tcp_hdr_len = ((raw[ihl + 12] >> 4) & 0xF) * 4
+            data_start = ihl + tcp_hdr_len
+            if data_start > total_len:
+                return b""
+            return raw[data_start:total_len]
         return b""
     except Exception:
         return b""
@@ -304,6 +305,11 @@ def cookie_extract(
     http_objects: Generator[Dict[str, Any], None, None]
 ) -> Generator[Dict[str, Any], None, None]:
     """Yield cookies found in HTTP objects."""
+    # Set-Cookie attributes that should not be treated as cookies
+    set_cookie_attrs = {
+        "path", "domain", "expires", "max-age", "maxage",
+        "secure", "httponly", "samesite", "comment",
+    }
     for http_obj in http_objects:
         for hdr_name in ("Cookie", "Set-Cookie"):
             val = http_obj["headers"].get(hdr_name, "")
@@ -313,6 +319,10 @@ def cookie_extract(
                 part = part.strip()
                 if "=" in part:
                     k, v = part.split("=", 1)
+                    k_stripped = k.strip().lower()
+                    # Skip Set-Cookie attributes (path, domain, etc.)
+                    if hdr_name == "Set-Cookie" and k_stripped in set_cookie_attrs:
+                        continue
                     yield {
                         "type": hdr_name.lower().replace("-", "_"),
                         "source": http_obj["session"],
@@ -334,7 +344,7 @@ def url_extract(
     for http_obj in http_objects:
         if http_obj["method"] in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"):
             host = http_obj["headers"].get("Host", "unknown")
-            url_key = f"{host}{http_obj['path']}"
+            url_key = f"{http_obj['method']}|{host}{http_obj['path']}"
             if url_key not in seen:
                 seen.add(url_key)
                 yield {
