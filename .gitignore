@@ -1,0 +1,40 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+pcap_creds_*.json
+
+# PCAP files
+*.pcap
+*.cap
+*.pcapng
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
