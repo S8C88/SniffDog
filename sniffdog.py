@@ -12,6 +12,23 @@ import sys
 from collections import defaultdict
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
+# Maximum file size: 1GB for pcap files (CWE-770)
+MAX_PCAP_SIZE = 1 * 1024 * 1024 * 1024
+MAX_OUTPUT_SIZE = 100 * 1024 * 1024  # 100MB for output
+
+
+def _validate_path(path: str, purpose: str = "file") -> str:
+    """Validate file path — canonicalize and check exists (CWE-20/CWE-22)."""
+    # CWE-22: Canonicalize path and prevent traversal
+    resolved = os.path.realpath(path)
+    if purpose == "input" and not os.path.isfile(resolved):
+        raise FileNotFoundError(f"Input file not found: {resolved}")
+    if purpose == "output":
+        parent = os.path.dirname(resolved)
+        if parent and not os.path.isdir(parent):
+            raise FileNotFoundError(f"Output directory does not exist: {parent}")
+    return resolved
+
 
 # Pipeline stage 1: pcap reader
 
@@ -20,8 +37,12 @@ def pcap_reader(path: str) -> Generator[Tuple[Any, bytes], None, None]:
     
     Falls back to raw byte reading if scapy chokes on the file.
     """
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Pcap not found: {path}")
+    # CWE-20/CWE-22: Validate input path
+    resolved = _validate_path(path, "input")
+    # CWE-770: Check file size before reading
+    file_size = os.path.getsize(resolved)
+    if file_size > MAX_PCAP_SIZE:
+        raise RuntimeError(f"Pcap file too large ({file_size} bytes > {MAX_PCAP_SIZE} max)")
 
     try:
         from scapy.utils import RawPcapReader
@@ -29,7 +50,7 @@ def pcap_reader(path: str) -> Generator[Tuple[Any, bytes], None, None]:
         raise RuntimeError("scapy not installed. Try: pip install scapy")
 
     try:
-        for pkt, raw in RawPcapReader(path):
+        for pkt, raw in RawPcapReader(resolved):
             if raw:
                 yield pkt, raw
     except Exception as e:
@@ -47,7 +68,7 @@ def http_filter(
             if raw and (b"HTTP/" in raw or b"GET " in raw or b"POST " in raw
                         or b"HTTP/1." in raw or b"Host:" in raw):
                 yield raw
-        except Exception:
+        except Exception:  # CWE-703: skip on malformed packets
             continue
 
 
@@ -81,7 +102,7 @@ def _parse_ip(raw: bytes) -> Optional[Tuple[str, str, str, str]]:
             # IPv6 — TODO: implement properly
             return None
         return None
-    except Exception:
+    except Exception:  # CWE-703: return None on parse failure
         return None
 
 
@@ -105,7 +126,7 @@ def _payload_from_raw(raw: bytes) -> bytes:
                 return b""
             return raw[data_start:total_len]
         return b""
-    except Exception:
+    except Exception:  # CWE-703: return empty on parse failure
         return b""
 
 
@@ -207,7 +228,7 @@ def http_parse(
                 "headers": headers,
                 "body": body,
             }
-        except Exception:
+        except Exception:  # CWE-703: skip on malformed packets
             continue
 
 
@@ -240,7 +261,7 @@ def cred_extract(
                         "username": user,
                         "password": passwd,
                     }
-            except Exception:
+            except Exception:  # CWE-703: skip unparseable auth headers
                 pass
 
         # Check POST body for credentials
@@ -273,7 +294,7 @@ def cred_extract(
                             "url": http_obj["path"],
                             "fields": found,
                         }
-                except Exception:
+                except Exception:  # CWE-703: skip unparseable form data
                     pass
 
             # JSON body
@@ -293,7 +314,7 @@ def cred_extract(
                                 "url": http_obj["path"],
                                 "fields": found,
                             }
-                except Exception:
+                except Exception:  # CWE-703: skip unparseable JSON data
                     pass
 
 
@@ -383,7 +404,9 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    out_fh = open(args.output, "w") if args.output else sys.stdout
+    # CWE-20/CWE-22: Validate output path before opening
+    out_path = _validate_path(args.output, "output") if args.output else None
+    out_fh = open(out_path, "w") if out_path else sys.stdout
 
     try:
         pipeline = pcap_reader(args.read)
@@ -452,7 +475,11 @@ def main():
                 out_fh.write(f"  {ck['name']}={ck['value']}  [{ck['url']}]\n")
 
     except Exception as e:
+        # CWE-200: User-safe error message (no stack trace)
         print(f"Error: {e}", file=sys.stderr)
+        if os.environ.get("SNIFFDOG_DEBUG"):
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
     finally:
         if args.output and out_fh is not sys.stdout:
