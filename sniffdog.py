@@ -7,7 +7,6 @@ import argparse
 import base64
 import json
 import os
-import re
 import sys
 from collections import defaultdict
 from typing import Any, Dict, Generator, List, Optional, Tuple
