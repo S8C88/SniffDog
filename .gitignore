@@ -38,3 +38,4 @@ pcap_creds_*.json
 .pytest_cache/
 .coverage
 htmlcov/
+*.pyc
